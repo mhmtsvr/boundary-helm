@@ -1,0 +1,235 @@
+version: 2.1
+
+orbs:
+  helm: circleci/helm@3.2.0
+
+executors:
+  helm-executor:
+    docker:
+      - image: cimg/base:stable
+    resource_class: medium
+
+jobs:
+  lint-and-validate:
+    executor: helm-executor
+    steps:
+      - checkout
+      - helm/install_helm_client:
+          version: v4.0.4
+      - run:
+          name: Lint Helm Chart
+          command: |
+            helm lint boundary-helm
+      - run:
+          name: Template Chart
+          command: |
+            helm template boundary-helm boundary-helm
+      - run:
+          name: Validate Chart Version
+          command: |
+            VERSION=$(grep '^version:' boundary-helm/Chart.yaml | awk '{print $2}')
+            echo "Chart version: $VERSION"
+            if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Error: Chart version must follow semantic versioning (x.y.z)"
+              exit 1
+            fi
+  editorconfig-check:
+    docker:
+      - image: cimg/go:1.25
+    resource_class: medium
+    steps:
+      - checkout
+      - run: go install github.com/editorconfig-checker/editorconfig-checker/v3/cmd/editorconfig-checker@v3.4.0
+      - run:
+          name: Check EditorConfig
+          command: |
+            if editorconfig-checker; then
+              echo -e "\nAll files conform to the EditorConfig rules"
+            else
+              echo -e "\nYou can set up EditorConfig (https://editorconfig.org/) in your IDE to enforce these formatting rules automatically"
+              exit 1
+            fi
+
+  validate-docs:
+    docker:
+      - image: cimg/go:1.25
+    resource_class: medium
+    steps:
+      - checkout
+      - run: go install github.com/norwoodj/helm-docs/cmd/helm-docs@v1.14.2
+      - run:
+          name: Generate Helm Documentation
+          command: helm-docs --chart-search-root=boundary-helm
+      - run:
+          name: Check for Documentation Changes
+          command: |
+            if ! git ls-files --error-unmatch boundary-helm/README.md > /dev/null 2>&1; then
+              echo "ERROR: README.md does not exist"
+              echo "Please run 'helm-docs --chart-search-root=boundary-helm' locally and commit the generated README.md"
+              exit 1
+            fi
+            if git diff --exit-code boundary-helm/README.md; then
+              echo "Documentation is up to date"
+            else
+              echo "ERROR: README.md is out of sync with values.yaml"
+              echo "Please run 'helm-docs --chart-search-root=boundary-helm' locally and commit the changes"
+              git diff boundary-helm/README.md
+              exit 1
+            fi
+
+  release:
+    executor: helm-executor
+    environment:
+      GITHUB_USER: mhmtsvr
+    steps:
+      - checkout
+      - helm/install_helm_client:
+          version: v4.0.4
+      - run:
+          name: Install chart-releaser
+          command: |
+            VERSION="v1.8.1"
+            ARCH="linux_amd64"
+            curl -sSL "https://github.com/helm/chart-releaser/releases/download/${VERSION}/chart-releaser_${VERSION#v}_${ARCH}.tar.gz" | tar xz
+            sudo mv cr /usr/local/bin/cr
+            cr version
+      - run:
+          name: Package Helm Chart
+          command: |
+            mkdir -p .cr-release-packages
+            helm package boundary-helm --destination .cr-release-packages
+      - run:
+          name: Create GitHub Release and Upload Chart
+          command: |
+            echo "Running cr upload..."
+            cr upload \
+              --owner ${GITHUB_USER} \
+              --git-repo boundary-helm \
+              --token "${GITHUB_TOKEN}" \
+              --package-path .cr-release-packages \
+              --commit "${CIRCLE_SHA1}" \
+              --release-name-template "v{{ .Version }}" \
+              --generate-release-notes \
+              --skip-existing
+      - run:
+          name: Push Chart to GHCR as OCI Artifact
+          command: |
+            # Extract version from Chart.yaml
+            VERSION=$(grep '^version:' boundary-helm/Chart.yaml | awk '{print $2}')
+            CHART_PACKAGE=".cr-release-packages/boundary-${VERSION}.tgz"
+
+            echo "Logging into GHCR..."
+            echo "${GITHUB_TOKEN}" | helm registry login ghcr.io --username "${GITHUB_USER}" --password-stdin
+
+            echo "Pushing chart version ${VERSION} to GHCR..."
+            PUSH_OUTPUT=$(helm push "${CHART_PACKAGE}" oci://ghcr.io/mhmtsvr 2>&1)
+            echo "$PUSH_OUTPUT"
+
+            # Extract digest from helm push output and save for signing step
+            CHART_DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'Digest: \Ksha256:[a-f0-9]+' || echo "")
+            if [ -n "$CHART_DIGEST" ]; then
+              echo "$CHART_DIGEST" > /tmp/chart_digest.txt
+              echo "Chart digest: $CHART_DIGEST"
+            fi
+
+            echo "Chart successfully pushed to oci://ghcr.io/mhmtsvr/boundary:${VERSION}"
+            echo ""
+            echo "NOTE: The GHCR package will be private by default."
+            echo "After the first release, manually change the package visibility to public at:"
+            echo "https://github.com/users/mhmtsvr/packages/container/boundary/settings"
+      - run:
+          name: Install Cosign
+          command: |
+            COSIGN_VERSION="v2.4.1"
+            curl -sSLO "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+            sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+            sudo chmod +x /usr/local/bin/cosign
+            cosign version
+      - run:
+          name: Sign Chart with Cosign (Keyless)
+          command: |
+            # Extract version from Chart.yaml
+            VERSION=$(grep '^version:' boundary-helm/Chart.yaml | awk '{print $2}')
+
+            # Read the digest saved from the push step
+            CHART_DIGEST=$(cat /tmp/chart_digest.txt 2>/dev/null || echo "")
+
+            if [ -z "$CHART_DIGEST" ]; then
+              echo "ERROR: Chart digest not found. Cannot sign without digest."
+              exit 1
+            fi
+
+            CHART_REF="ghcr.io/mhmtsvr/boundary@${CHART_DIGEST}"
+            echo "Chart reference: ${CHART_REF}"
+
+            echo "Authenticating Cosign to GHCR..."
+            # Cosign needs to authenticate to push the signature artifact to GHCR
+            echo "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${GITHUB_USER}" --password-stdin
+
+            echo "Generating custom OIDC token with Sigstore audience..."
+            # Generate a custom OIDC token with audience set to "sigstore" for Fulcio
+            SIGSTORE_OIDC_TOKEN=$(circleci run oidc get --claims '{"aud": "sigstore"}')
+
+            echo "Signing chart with Cosign using CircleCI OIDC..."
+
+            # Sign using CircleCI's OIDC token (keyless signing)
+            # This will automatically push the signature to GHCR
+            cosign sign --yes \
+              --oidc-issuer=https://oidc.circleci.com/org/${CIRCLE_ORGANIZATION_ID} \
+              --identity-token="${SIGSTORE_OIDC_TOKEN}" \
+              --annotations=version="${VERSION}" \
+              "${CHART_REF}"
+
+            echo "Chart successfully signed!"
+            echo "Signature stored in GHCR alongside the chart artifact"
+            echo ""
+            echo "To verify the signature, run:"
+            echo "  cosign verify ${CHART_REF} \\"
+            echo "    --certificate-identity-regexp='https://circleci\.com/api/v2/projects/.+/pipeline-definitions/.+' \\"
+            echo "    --certificate-oidc-issuer-regexp='https://oidc\.circleci\.com/org/.+' \\"
+            echo "    --annotations=version=${VERSION}"
+
+workflows:
+  version: 2
+  validate:
+    jobs:
+      - lint-and-validate:
+          filters:
+            branches:
+              only: /.*/
+      - editorconfig-check:
+          filters:
+            branches:
+              only: /.*/
+
+  release:
+    jobs:
+      - lint-and-validate:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      - editorconfig-check:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      - validate-docs:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      - release:
+          requires:
+            - lint-and-validate
+            - editorconfig-check
+            - validate-docs
+          context: gh-release
+          filters:
+            branches:
+              only: main
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/

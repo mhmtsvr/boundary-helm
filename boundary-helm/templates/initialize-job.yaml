@@ -1,0 +1,115 @@
+{{- if .Values.initialize.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: boundary-init
+  namespace: {{ include "boundary.namespace" . }}
+  labels:
+    app.kubernetes.io/name: boundary-init
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    {{- with .Values.initialize.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.vault.enabled }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-status: "update"
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/agent-cache-enable: "true"
+        vault.hashicorp.com/role: "{{ .Values.vault.roleName }}"
+        vault.hashicorp.com/agent-inject-secret-boundary-database-creds: "{{ .Values.vault.databaseSecretPath }}"
+        vault.hashicorp.com/agent-inject-template-boundary-database-creds: |
+          {{- printf "{{- with secret " | nindent 10 }}"{{ include "boundary.vaultSecretPath" . }}"{{ printf " -}}" }}
+          {{- printf "postgresql://{{ .Data.data.username }}:{{ urlquery .Data.data.password }}@{{ .Data.data.address }}" | nindent 10 }}:5432/{{ .Values.database.databaseName }}{{ .Values.database.additionalUrlParameters }}
+          {{- printf "{{- end -}}" | nindent 10 }}
+        {{- end }}
+        {{- with .Values.initialize.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      # TODO: sql certificate with sslrootcert=/etc/secrets/certs/postgres
+      labels:
+        app.kubernetes.io/name: boundary-init
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+        {{- with .Values.initialize.extraLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: boundary-init
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.initialize.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.initialize.securityContext.pod | nindent 8 }}
+      restartPolicy: OnFailure
+      containers:
+      - name: boundary-init
+        securityContext:
+          {{- toYaml .Values.initialize.securityContext.container | nindent 10 }}
+        image: "{{ .Values.initialize.image.repository }}:{{ .Values.initialize.image.tag }}"
+        imagePullPolicy: {{ .Values.initialize.image.pullPolicy }}
+        command:
+        - /bin/sh
+        - "-c"
+        args:
+        - |
+          boundary database migrate -config /boundary/boundary-controller-config.hcl || true
+          echo "Starting to initialize the boundary database..."
+          boundary database init -config /boundary/boundary-controller-config.hcl
+        env:
+        - name: HOSTNAME
+          value: boundary
+        {{- if not .Values.vault.enabled }}
+        - name: BOUNDARY_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.database.secretName }}
+              key: {{ .Values.database.secretKey }}
+        {{- end }}
+        {{- if .Values.initialize.extraEnvironmentVars }}
+        {{- toYaml .Values.initialize.extraEnvironmentVars | nindent 8 }}
+        {{- end }}
+        {{- include "boundary.extraSecretEnvironmentVars" .Values.global | nindent 8 }}
+        resources:
+          {{- toYaml .Values.initialize.resources | nindent 10 }}
+        volumeMounts:
+        - name: boundary-config
+          mountPath: /boundary
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        {{- if .Values.initialize.volumeMounts }}
+        {{- toYaml .Values.initialize.volumeMounts | nindent 8 }}
+        {{- end }}
+      volumes:
+      - name: boundary-config
+        configMap:
+          name: boundary-init-config
+      - name: tmp
+        emptyDir: {}
+      {{- if .Values.initialize.volumes }}
+      {{- toYaml .Values.initialize.volumes | nindent 6 }}
+      {{- end }}
+      {{- with .Values.initialize.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.initialize.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end}}

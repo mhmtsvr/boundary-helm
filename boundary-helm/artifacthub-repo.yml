@@ -1,0 +1,6 @@
+# Artifact Hub repository metadata file
+#
+repositoryID: 86a0c22e-e97e-4c68-80fd-e5f54bdb5622
+owners: # (optional, used to claim repository ownership)
+  - name: mhmtsvr
+    email: mehmetipeksever@gmail.com

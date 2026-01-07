@@ -1,0 +1,11 @@
+tmp/
+.DS_Store
+
+# Helm
+*.tgz
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

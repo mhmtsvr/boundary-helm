@@ -1,0 +1,110 @@
+# Override values file for Boundary with AWS KMS integration
+# This file demonstrates how to configure Boundary to use AWS KMS
+# for encryption keys (root, recovery, worker-auth, config) and Vault
+# for database credentials
+#
+# Prerequisites:
+# 1. Create a Kubernetes secret named 'boundary-kms' with your AWS credentials:
+#    kubectl create secret generic boundary-kms \
+#      --from-literal=region=<AWS_REGION> \
+#      --from-literal=kms-id=<YOUR_KMS_KEY_ID>
+#
+# 2. Ensure your AWS IAM role has permissions for KMS operations.
+#    Follow Boundary documentation and update this override as needed
+#
+# Usage:
+# helm upgrade --install boundary oci://ghcr.io/mhmtsvr/boundary -n boundary \
+#  -f examples/helm/values-awskms-override.yaml
+
+
+global:
+  # AWS credentials and KMS configuration
+  # These environment variables are injected into Init Job, Controller, and Worker pods
+  # and are required for AWS KMS integration
+  extraSecretEnvironmentVars:
+    - envName: AWS_REGION
+      secretName: boundary-kms
+      secretKey: region
+    - envName: AWSKMS_WRAPPER_KEY_ID
+      secretName: boundary-kms
+      secretKey: kms-id
+
+vault:
+  enabled: true
+
+controller:
+  # Override controller configuration
+  config: |
+    disable_mlock = true
+    log_format    = "standard"
+
+    controller {
+      name        = "env://POD_NAME"
+      description = "Boundary Kubernetes Controller"
+      database {
+        url = "file:///vault/secrets/boundary-database-creds"
+      }
+      public_cluster_addr = "boundary-controller:9201"
+      auth_token_time_to_live = "24h"
+      max_idle_time = "2h"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "api"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "cluster"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "ops"
+      tls_disable = true
+    }
+    kms "awskms" {
+      purpose    = "worker-auth"
+    }
+
+    kms "awskms" {
+      purpose    = "root"
+    }
+
+    kms "awskms" {
+      purpose    = "recovery"
+    }
+    kms "awskms" {
+      purpose    = "config"
+    }
+
+
+worker:
+  # Override worker configuration
+  config: |
+    disable_mlock = true
+    log_format    = "standard"
+
+    worker {
+      name        = "env://POD_NAME"
+      description = "Kubernetes Worker Node"
+      controllers = ["boundary-controller:9201"]
+      public_addr = "env://BOUNDARY_WORKER_LOAD_BALANCER"
+
+      initial_upstreams = [
+        "boundary-controller-0.boundary-controller-internal",
+        "boundary-controller-1.boundary-controller-internal",
+        "boundary-controller-2.boundary-controller-internal"
+      ]
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0:9202"
+      purpose     = "proxy"
+      tls_disable   = true
+    }
+
+    kms "awskms" {
+      purpose    = "worker-auth"
+    }

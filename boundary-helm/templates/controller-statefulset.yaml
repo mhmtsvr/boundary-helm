@@ -1,0 +1,177 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: boundary-controller
+  namespace: {{ include "boundary.namespace" . }}
+  labels:
+    app.kubernetes.io/name: boundary-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    {{- with .Values.controller.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.controller.replicas }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: boundary-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  serviceName: boundary-controller-internal
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: "boundary-controller"
+        checksum/config: {{ .Values.controller.config | toYaml | sha256sum }}
+        {{- if .Values.vault.enabled }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-status: "update"
+        vault.hashicorp.com/agent-pre-populate: "true"
+        vault.hashicorp.com/agent-cache-enable: "true"
+        vault.hashicorp.com/role: "{{ .Values.vault.roleName }}"
+        vault.hashicorp.com/agent-inject-secret-boundary-database-creds: "{{ .Values.vault.databaseSecretPath }}"
+        vault.hashicorp.com/agent-inject-template-boundary-database-creds: |
+          {{- printf "{{- with secret " | nindent 10 }}"{{ include "boundary.vaultSecretPath" . }}"{{ printf " -}}" }}
+          {{- printf "postgresql://{{ .Data.data.username }}:{{ urlquery .Data.data.password }}@{{ .Data.data.address }}" | nindent 10 }}:5432/{{ .Values.database.databaseName }}{{ .Values.database.additionalUrlParameters }}
+          {{- printf "{{- end -}}" | nindent 10 }}
+        {{- end }}
+        {{- with .Values.controller.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      # TODO: sql certificate with sslrootcert=/etc/secrets/certs/postgres
+      labels:
+        app.kubernetes.io/name: boundary-controller
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+        helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+        {{- with .Values.controller.extraLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: boundary-controller
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.controller.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.controller.securityContext.pod | nindent 8 }}
+      containers:
+      - name: boundary-controller
+        securityContext:
+          {{- toYaml .Values.controller.securityContext.container | nindent 10 }}
+        image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+        imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+        {{- if .Values.controller.preStop }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              {{- range (.Values.controller.preStop) }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- else }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - "/bin/sh"
+              - "-c"
+              - "sleep {{ .Values.controller.preStopSleepSeconds }} && kill -SIGTERM $(pidof boundary)"
+        {{- end }}
+        command:
+        - /bin/sh
+        - "-c"
+        args:
+        - boundary server -config /boundary/boundary-controller-config.hcl
+        env:
+        - name: HOSTNAME
+          value: boundary
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        {{- if not .Values.vault.enabled }}
+        - name: BOUNDARY_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.database.secretName }}
+              key: {{ .Values.database.secretKey }}
+        {{- end }}
+        {{- if .Values.controller.extraEnvironmentVars }}
+        {{- toYaml .Values.controller.extraEnvironmentVars | nindent 8 }}
+        {{- end }}
+        {{- include "boundary.extraSecretEnvironmentVars" .Values.global | nindent 8 }}
+        resources:
+          {{- toYaml .Values.controller.resources | nindent 10 }}
+        volumeMounts:
+        - name: boundary-config
+          mountPath: /boundary
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        {{- if .Values.controller.volumeMounts }}
+        {{- toYaml .Values.controller.volumeMounts | nindent 8 }}
+        {{- end }}
+        ports:
+        - name: api
+          containerPort: 9200
+          protocol: TCP
+        - name: cluster
+          containerPort: 9201
+          protocol: TCP
+        - name: ops
+          containerPort: 9203
+        startupProbe:
+          httpGet:
+            path: /health
+            port: ops
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ops
+          initialDelaySeconds: 30
+          timeoutSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: ops
+          initialDelaySeconds: 30
+          timeoutSeconds: 30
+      volumes:
+      - name: boundary-config
+        configMap:
+          name: boundary-controller-config
+      - name: tmp
+        emptyDir: {}
+      {{- if .Values.controller.volumes }}
+      {{- toYaml .Values.controller.volumes | nindent 6 }}
+      {{- end }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

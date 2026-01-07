@@ -1,0 +1,70 @@
+# Override values file for Boundary with Vault integration
+# This file demonstrates how to configure Boundary to use Vault
+# for database credentials instead of Kubernetes Secrets
+#
+# Usage:
+# helm upgrade --install boundary oci://ghcr.io/mhmtsvr/boundary -n boundary \
+#  -f examples/helm/values-config-override.yaml
+
+vault:
+  enabled: true
+
+controller:
+  # Override controller configuration
+  config: |
+    disable_mlock = true
+    log_format    = "standard"
+
+    controller {
+      name        = "env://POD_NAME"
+      description = "Boundary Kubernetes Controller"
+      database {
+        url = "file:///vault/secrets/boundary-database-creds"
+      }
+      public_cluster_addr = "boundary-controller:9201"
+      auth_token_time_to_live = "24h"
+      max_idle_time = "2h"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "api"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "cluster"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "ops"
+      tls_disable = true
+    }
+    # Root KMS configuration block: this is the root key for Boundary
+    # Use a production KMS such as AWS KMS in production installs
+    kms "aead" {
+      purpose = "root"
+      aead_type = "aes-gcm"
+      key = "uC8zAQ3sLJ9o0ZlH5lWIgxNZrNn0FiFqYj4802VKLKQ="
+      key_id = "global_root"
+    }
+
+    # Worker authorization KMS
+    # Use a production KMS such as AWS KMS for production installs
+    # This key is the same key used in the worker configuration
+    kms "aead" {
+      purpose = "worker-auth"
+      aead_type = "aes-gcm"
+      key = "cOQ9fiszFoxu/c20HbxRQ5E9dyDM6PqMY1GwqVLihsI="
+      key_id = "global_worker-auth"
+    }
+
+    # Recovery KMS block: configures the recovery key for Boundary
+    # Use a production KMS such as AWS KMS for production installs
+    kms "aead" {
+      purpose = "recovery"
+      aead_type = "aes-gcm"
+      key = "nIRSASgoP91KmaEcg/EAaM4iAkksyB+Lkes0gzrLIRM="
+      key_id = "global_recovery"
+    }

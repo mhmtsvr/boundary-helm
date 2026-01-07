@@ -1,0 +1,28 @@
+{{- if .Values.controller.podDisruptionBudget.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: boundary-controller
+  namespace: {{ include "boundary.namespace" . }}
+  labels:
+    app.kubernetes.io/name: boundary-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    {{- with .Values.controller.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if and .Values.controller.podDisruptionBudget.minAvailable .Values.controller.podDisruptionBudget.maxUnavailable }}
+    {{- fail "controller.podDisruptionBudget cannot have both minAvailable and maxUnavailable set" }}
+  {{- end }}
+  {{- if .Values.controller.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.controller.podDisruptionBudget.minAvailable }}
+  {{- else if .Values.controller.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.controller.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: boundary-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

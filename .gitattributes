@@ -1,0 +1,3 @@
+*.tpl linguist-language=Go-Template linguist-detectable
+*.yaml linguist-language=YAML linguist-detectable
+*.yml linguist-language=YAML linguist-detectable

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "initialize": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable initialization of the boundary cluster. Only true or false are allowed."
+        }
+      },
+      "required": ["enabled"]
+    },
+    "vault": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable Vault integration for database credentials. Only true or false are allowed."
+        },
+        "secretEngine": {
+          "type": "string",
+          "enum": ["kv2"],
+          "description": "Secret engine type. Only kv2 is supported."
+        }
+      },
+      "required": ["enabled", "secretEngine"]
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "description": "Number of controller replicas. Must be an integer value.",
+          "minimum": 0
+        },
+        "config": {
+          "type": "string",
+          "description": "Boundary controller configuration in HCL format."
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable PodDisruptionBudget for controller pods. Only true or false are allowed."
+            },
+            "minAvailable": {
+              "type": "integer",
+              "description": "Minimum number of pods that must be available during disruptions. Must be an integer value.",
+              "minimum": 0
+            },
+            "maxUnavailable": {
+              "type": "integer",
+              "description": "Maximum number of pods that can be unavailable during disruptions. Must be an integer value.",
+              "minimum": 0
+            }
+          },
+          "required": ["enabled"]
+        }
+      },
+      "required": ["replicas", "config"]
+    },
+    "worker": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "description": "Number of worker replicas. Must be an integer value.",
+          "minimum": 0
+        },
+        "config": {
+          "type": "string",
+          "description": "Boundary worker configuration in HCL format."
+        },
+        "loadbalancer": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable LoadBalancer service for worker nodes. Only true or false are allowed."
+            }
+          },
+          "required": ["enabled"]
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable PodDisruptionBudget for worker pods. Only true or false are allowed."
+            },
+            "minAvailable": {
+              "type": "integer",
+              "description": "Minimum number of pods that must be available during disruptions. Must be an integer value.",
+              "minimum": 0
+            },
+            "maxUnavailable": {
+              "type": "integer",
+              "description": "Maximum number of pods that can be unavailable during disruptions. Must be an integer value.",
+              "minimum": 0
+            }
+          },
+          "required": ["enabled"]
+        }
+      },
+      "required": ["replicas", "config"]
+    }
+  }
+}

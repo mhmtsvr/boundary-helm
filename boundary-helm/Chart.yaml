@@ -1,0 +1,21 @@
+apiVersion: v2
+name: boundary
+version: 0.1.0
+kubeVersion: ">= 1.32.0-0"
+description: Hashicorp Boundary Community Chart (Unofficial)
+type: application
+keywords:
+- boundary
+- security
+- management
+- automation
+- infrastructure
+home: https://github.com/mhmtsvr/boundary-helm
+sources:
+  - https://github.com/hashicorp/boundary
+  - https://github.com/mhmtsvr/boundary-helm
+maintainers:
+  - name: mhmtsvr
+    url: https://mehmetsever.net
+icon: https://raw.githubusercontent.com/hashicorp/boundary/main/boundary.png
+appVersion: "0.21.0"

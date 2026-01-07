@@ -1,0 +1,414 @@
+# yaml-language-server: $schema=./values.schema.json
+
+## @section Global Settings
+
+global:
+  # -- Prefix for resource names
+  namePrefix: "boundary"
+  # -- Kubernetes namespace
+  namespace: "boundary"
+  # -- Image pull secrets for registry authentication
+  imagePullSecrets: []
+  # -- Extra environment variables from secrets (injected into all pods)
+  extraSecretEnvironmentVars: []
+
+## @section Vault Integration
+
+vault:
+  # -- Enable Vault for database credentials
+  enabled: false
+  # -- Vault role name
+  roleName: "boundary"
+  # -- Secret engine type (only kv2 supported)
+  secretEngine: "kv2"
+  # -- Vault path to database secret (without /data/)
+  databaseSecretPath: "secret/database/postgres"
+
+## @section Database Configuration
+
+database:
+  # -- Database name
+  databaseName: "boundary"
+  # -- Additional URL parameters for database connection
+  additionalUrlParameters: ""
+  # -- Secret name containing database URL
+  secretName: "boundary-database-secret"
+  # -- Secret key for database URL
+  secretKey: "url"
+
+## @section Initialize Job
+
+initialize:
+  # -- Enable initialization job (run once to bootstrap cluster)
+  enabled: true
+
+  image:
+    # -- Image repository
+    repository: "hashicorp/boundary"
+    # -- Image tag
+    tag: "0.21.0"
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+
+  securityContext:
+    pod:
+      runAsNonRoot: true
+      runAsGroup: 1000
+      runAsUser: 100
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      readOnlyRootFilesystem: true
+
+  # -- Tolerations for init job
+  tolerations: []
+
+  # -- Node selector for init job
+  nodeSelector: {}
+
+  # -- Priority class name
+  priorityClassName: ""
+
+  # -- Extra volumes
+  volumes: []
+
+  # -- Extra volume mounts
+  volumeMounts: []
+
+  serviceAccount:
+    # -- Service account annotations
+    annotations: {}
+
+  # -- Extra annotations
+  annotations: {}
+
+  # -- Extra labels
+  extraLabels: {}
+
+## @section Controller Configuration
+
+controller:
+  # -- Number of controller replicas
+  replicas: 3
+
+  image:
+    # -- Image repository
+    repository: "hashicorp/boundary"
+    # -- Image tag
+    tag: "0.21.0"
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+
+  # -- Deployment update strategy
+  strategy: {}
+
+  # -- Boundary controller configuration
+  # @default -- See values.yaml
+  config: |
+    disable_mlock = true
+    log_format    = "standard"
+
+    controller {
+      name        = "env://POD_NAME"
+      description = "Boundary Kubernetes Controller"
+      database {
+        # Uses environment variable from Kubernetes Secret (default)
+        # When vault.enabled is true, override this to use: file:///vault/secrets/boundary-database-creds
+        url = "env://BOUNDARY_DATABASE_URL"
+      }
+      public_cluster_addr = "boundary-controller:9201"
+      auth_token_time_to_live = "24h"
+      max_idle_time = "2h"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "api"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "cluster"
+      tls_disable = true
+    }
+    listener "tcp" {
+      address     = "0.0.0.0"
+      purpose     = "ops"
+      tls_disable = true
+    }
+    # Root KMS configuration block: this is the root key for Boundary
+    # Use a production KMS such as AWS KMS in production installs
+    kms "aead" {
+      purpose = "root"
+      aead_type = "aes-gcm"
+      key = "uC8zAQ3sLJ9o0ZlH5lWIgxNZrNn0FiFqYj4802VKLKQ="
+      key_id = "global_root"
+    }
+
+    # Worker authorization KMS
+    # Use a production KMS such as AWS KMS for production installs
+    # This key is the same key used in the worker configuration
+    kms "aead" {
+      purpose = "worker-auth"
+      aead_type = "aes-gcm"
+      key = "cOQ9fiszFoxu/c20HbxRQ5E9dyDM6PqMY1GwqVLihsI="
+      key_id = "global_worker-auth"
+    }
+
+    # Recovery KMS block: configures the recovery key for Boundary
+    # Use a production KMS such as AWS KMS for production installs
+    kms "aead" {
+      purpose = "recovery"
+      aead_type = "aes-gcm"
+      key = "nIRSASgoP91KmaEcg/EAaM4iAkksyB+Lkes0gzrLIRM="
+      key_id = "global_recovery"
+    }
+
+  resources:
+    requests:
+      memory: 384Mi
+      cpu: 100m
+    limits:
+      memory: 384Mi
+      cpu: 300m
+
+  securityContext:
+    pod:
+      runAsNonRoot: true
+      runAsGroup: 1000
+      runAsUser: 100
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      readOnlyRootFilesystem: true
+
+  # -- Termination grace period in seconds
+  terminationGracePeriodSeconds: 10
+
+  # -- Sleep seconds during preStop hook
+  preStopSleepSeconds: 5
+
+  # -- Custom preStop commands
+  preStop: []
+
+  # -- Tolerations for controller pods
+  tolerations: []
+
+  # -- Topology spread constraints
+  topologySpreadConstraints: []
+
+  # -- Affinity rules (default: anti-affinity for HA)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: boundary-controller
+            topologyKey: kubernetes.io/hostname
+
+  # -- Node selector for controller pods
+  nodeSelector: {}
+
+  # -- Priority class name
+  priorityClassName: ""
+
+  # -- Extra volumes to add to the controller pods
+  volumes: []
+
+  # -- Extra volume mounts to add to the controller container
+  volumeMounts: []
+
+  # -- Extra labels to attach to the controller pods
+  extraLabels: {}
+
+  # -- Extra annotations to attach to the controller pods
+  annotations: {}
+
+  service:
+    # -- Service annotations
+    annotations: {}
+
+  ingress:
+    # -- Enable ingress
+    enabled: false
+    # -- Ingress labels
+    labels: {}
+    # -- Ingress annotations
+    annotations: {}
+    # -- Ingress class name
+    ingressClassName: ""
+    # -- Path type for ingress
+    pathType: Prefix
+    # -- Ingress hosts
+    hosts:
+      - host: chart-example.local
+        paths: []
+    # -- Extra paths
+    extraPaths: []
+    # -- TLS configuration
+    tls: []
+
+  serviceAccount:
+    # -- Service account annotations
+    annotations: {}
+
+  podDisruptionBudget:
+    # -- Enable PodDisruptionBudget for controller pods
+    enabled: true
+    # -- Minimum available pods during disruptions
+    minAvailable: 2
+
+## @section Worker Configuration
+
+worker:
+  # -- Number of worker replicas
+  replicas: 3
+
+  image:
+    # -- Image repository
+    repository: "hashicorp/boundary"
+    # -- Image tag
+    tag: "0.21.0"
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+
+  # -- Deployment update strategy
+  strategy: {}
+
+  # -- Boundary worker configuration
+  # @default -- See values.yaml
+  config: |
+    disable_mlock = true
+    log_format    = "standard"
+
+    worker {
+      name        = "env://POD_NAME"
+      description = "Kubernetes Worker Node"
+      controllers = ["boundary-controller:9201"]
+      public_addr = "env://BOUNDARY_WORKER_LOAD_BALANCER"
+
+      initial_upstreams = [
+        "boundary-controller-0.boundary-controller-internal",
+        "boundary-controller-1.boundary-controller-internal",
+        "boundary-controller-2.boundary-controller-internal"
+      ]
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0:9202"
+      purpose     = "proxy"
+      tls_disable   = true
+    }
+
+    # Worker authorization KMS
+    # Use a production KMS such as AWS KMS for production installs
+    # This key is the same key used in the worker configuration
+    kms "aead" {
+      purpose = "worker-auth"
+      aead_type = "aes-gcm"
+      key = "cOQ9fiszFoxu/c20HbxRQ5E9dyDM6PqMY1GwqVLihsI="
+      key_id = "global_worker-auth"
+    }
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+
+  securityContext:
+    pod:
+      runAsNonRoot: true
+      runAsGroup: 1000
+      runAsUser: 100
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      readOnlyRootFilesystem: true
+
+  # -- Termination grace period in seconds
+  terminationGracePeriodSeconds: 10
+
+  # -- Sleep seconds during preStop hook
+  preStopSleepSeconds: 5
+
+  # -- Custom preStop commands
+  preStop: []
+
+  # -- Tolerations for worker pods
+  tolerations: []
+
+  # -- Topology spread constraints
+  topologySpreadConstraints: []
+
+  # -- Affinity rules (default: anti-affinity for HA)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: boundary-worker
+            topologyKey: kubernetes.io/hostname
+
+  # -- Node selector for worker pods
+  nodeSelector: {}
+
+  # -- Priority class name
+  priorityClassName: ""
+
+  # -- Extra volumes
+  volumes: []
+
+  # -- Extra volume mounts
+  volumeMounts: []
+
+  # -- Extra labels
+  extraLabels: {}
+
+  # -- Extra annotations
+  annotations: {}
+
+  service:
+    # -- Service annotations
+    annotations: {}
+
+  loadbalancer:
+    # -- Enable LoadBalancer service
+    enabled: true
+    # -- Public address for workers (required for external access)
+    publicAddr: "localhost"
+    # -- LoadBalancer annotations
+    annotations: {}
+
+  serviceAccount:
+    # -- Service account annotations
+    annotations: {}
+
+  podDisruptionBudget:
+    # -- Enable PodDisruptionBudget for worker pods
+    enabled: true
+    # -- Minimum available pods during disruptions
+    minAvailable: 2

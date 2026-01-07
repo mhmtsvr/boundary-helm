@@ -1,0 +1,23 @@
+
+Thank you for installing HashiCorp Boundary with Community Chart!
+
+Now that you have deployed Boundary, you should look over the official docs here:
+
+https://developer.hashicorp.com/boundary/docs
+
+
+Your release is named {{ .Release.Name }}. To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get manifest {{ .Release.Name }}
+
+{{- if .Values.initialize.enabled }}
+
+ℹ️ To retrieve the initial credentials after deployment, run:
+
+  $ kubectl logs -l app.kubernetes.io/name=boundary-init -n {{ include "boundary.namespace" . }} --tail=-1
+
+This will display the admin username, password, and other initial configuration details.
+
+⚠️ Please do not forget to set initialize.enabled to false after the initial deployment.
+{{- end }}

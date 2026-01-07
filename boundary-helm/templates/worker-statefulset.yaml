@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: boundary-worker
+  namespace: {{ include "boundary.namespace" . }}
+  labels:
+    app.kubernetes.io/name: boundary-worker
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    {{- with .Values.worker.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.worker.replicas }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: boundary-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  serviceName: boundary-worker
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ .Values.worker.config | toYaml | sha256sum }}
+        {{- with .Values.worker.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        app.kubernetes.io/name: boundary-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+        helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+        {{- with .Values.worker.extraLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: boundary-worker
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.worker.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.worker.securityContext.pod | nindent 8 }}
+      containers:
+      - name: boundary-worker
+        securityContext:
+          {{- toYaml .Values.worker.securityContext.container | nindent 10 }}
+        image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+        imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+        {{- if .Values.worker.preStop }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              {{- range (.Values.worker.preStop) }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- else }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - "/bin/sh"
+              - "-c"
+              - "sleep {{ .Values.worker.preStopSleepSeconds }} && kill -SIGTERM $(pidof boundary)"
+        {{- end }}
+        command:
+        - /bin/sh
+        - "-c"
+        args:
+        - boundary server -config /boundary/boundary-worker-config.hcl
+        env:
+        - name: HOSTNAME
+          value: boundary
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: BOUNDARY_WORKER_LOAD_BALANCER
+          value: {{ .Values.worker.loadbalancer.publicAddr | quote }}
+        {{- if .Values.worker.extraEnvironmentVars }}
+        {{- toYaml .Values.worker.extraEnvironmentVars | nindent 8 }}
+        {{- end }}
+        {{- include "boundary.extraSecretEnvironmentVars" .Values.global | nindent 8 }}
+        resources:
+          {{- toYaml .Values.worker.resources | nindent 10 }}
+        volumeMounts:
+        - name: boundary-config
+          mountPath: /boundary
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        {{- if .Values.worker.volumeMounts }}
+        {{- toYaml .Values.worker.volumeMounts | nindent 8 }}
+        {{- end }}
+        ports:
+        - name: proxy
+          containerPort: 9202
+          protocol: TCP
+        startupProbe:
+          tcpSocket:
+            port: proxy
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+          timeoutSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: proxy
+        readinessProbe:
+          tcpSocket:
+            port: proxy
+      volumes:
+      - name: boundary-config
+        configMap:
+          name: boundary-worker-config
+      - name: tmp
+        emptyDir: {}
+      {{- if .Values.worker.volumes }}
+      {{- toYaml .Values.worker.volumes | nindent 6 }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
